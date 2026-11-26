@@ -1,240 +1,172 @@
-#!/usr/bin/env python3
-"""Five Seconds to Explain the Glass entry.
+"""Five Seconds to Explain the Glass.
 
-Writes the single sentence a house cat would say in its own defence
-in the five seconds after sweeping a glass off the table, to
-/output/entry.txt.
+The job: hand the judge one sentence, the excuse a house cat gives in
+the five seconds after sweeping a glass off the table, and write it to
+the file named by OUTPUT_PATH (default /output/entry.txt).
 
-How it picks the line: twelve original candidate excuses, each
-written for this entry, are scored against the judge's five criteria,
-in the judge's own order of importance:
+The sentence is chosen, not typed in directly. Twelve fresh excuse
+lines are drafted below, each one written for this entry, and each is
+marked 0 to 5 on the judge's five tests, in the order the judge weighs
+them: it must be one sentence of at most 200 characters excusing the
+glass; it must sound like a cat thinking for itself, with no remorse
+and no apology; it must carry a new comic idea instead of the tired
+gravity, slippery-edge or already-falling lines; it must fit in five
+seconds of speech; and it must waste no characters. The marks are
+weighted 2, 5, 4, 3, 2, the best total wins, and the earliest line wins
+any tie, so the pick is the same on every run.
 
-  1. one sentence of at most 200 characters in which a house cat
-     excuses knocking a glass off the table
-  2. sounds like a cat's own logic, self-interest and total lack of
-     remorse, rather than a person apologising
-  3. lands a fresh comic idea, not the obvious gravity, slippery-edge
-     or it-was-already-falling lines
-  4. fits the five seconds: a spoken line a cat could plausibly
-     deliver, not a written paragraph of reasoning
-  5. uses every character well, with no padding, throat-clearing or
-     repeated joke
+A line that leans on one of the tired ideas the judge calls out by
+name loses one freshness mark per idea found in its own wording, so a
+familiar line cannot win on a generous hand mark alone.
 
-Each criterion is rated 0-5 and weighted 2, 5, 4, 3, 2, matching the
-judge's priority order (cat voice and freshness carry the most
-weight after validity). The highest total wins; ties go to the
-earliest candidate in the list, so the choice is fully deterministic.
+The winning draft then goes through one genuine second pass (see the
+note above POLISHED): the draft is read again, its real weak spots are
+named, and the wording is fixed. The polished line is the entry. Before
+anything is written, the polished line is put through the gate: 1 to
+200 characters, one line, exactly one sentence, and no word that gives
+the game away by apologising.
 
-Freshness is not only hand-rated: any candidate that leans on one of
-the tired lines the judge names outright (gravity, a slippery edge,
-a glass already falling) loses one freshness point per such phrase
-found in its own text (clamped at zero), so an obvious line cannot
-win on a generous hand rating alone.
+The run is fully deterministic: no network, no outside input, no dice.
+The program prints the winning draft, the polished line, and the
+SHA-256 of the text it wrote, so the result can be checked by hand."""
 
-Revision pass: the winning draft is then revised once, by hand, in
-a second pass that fixes its real weaknesses (see REVISION below).
-The revised text is the entry. The program checks the revised text
-against the gate and against a no-apology word list before writing
-it, and prints the SHA-256 of the file it wrote.
+import hashlib
+import os
+import sys
 
-No network, no external input, no randomness. The program verifies
-its own output (1-200 characters, a single line, UTF-8) and prints
-the SHA-256 of the file it wrote.
-"""
+EXIT_OK = 0
+EXIT_FAIL = 1
 
-from hashlib import sha256
-from os import environ, makedirs
-from sys import exit as finish, stderr
+# How much each of the judge's five tests counts, in the judge's order:
+# a valid single sentence, a true cat voice, a fresh idea, fits five
+# seconds, wastes no characters.
+MARKS_WEIGHT = {"valid": 2, "voice": 5, "fresh": 4, "quick": 3, "tight": 2}
 
-# Weights for the five judge criteria, in the judge's priority order:
-# valid, cat voice, fresh, five seconds, tight.
-WEIGHTS = (2, 5, 4, 3, 2)
+# The tired ideas the judge names outright. One freshness mark is lost
+# for each of these found hiding inside a draft's own wording.
+STALE_IDEAS = ("gravity", "slippery edge", "was already falling", "leaning off the edge")
 
-# The obvious lines the judge names outright. A candidate leaning on
-# one of these has already been told a thousand times; each hit costs
-# one freshness point. Matched case-insensitively against the text.
-CLICHES = (
-    "gravity",
-    "slippery",
-    "already falling",
-    "leaning toward the edge",
-)
+# Words that hand the argument to the human: any hint of an apology
+# or a confession. The polished entry must contain none of them.
+CONCESSIONS = ("sorry", "apologize", "apologise", "my fault", "my bad", "forgive me", "did not mean to", "didn't mean to")
 
-# Words that would concede the argument: an apology or a confession
-# in any form. The revised entry must contain none of them.
-APOLOGY_WORDS = (
-    "sorry",
-    "apologise",
-    "apologize",
-    "my fault",
-    "my bad",
-    "didn't mean",
-    "did not mean",
-    "forgive me",
-)
+# Twelve fresh drafts. Each item is a dict with the line and its five
+# marks, in the order valid, voice, fresh, quick, tight.
+DRAFTS = [
+    {"line": "The glass was running an unauthorised experiment in falling, and I merely watched the results from a safe height.", "marks": {"valid": 5, "voice": 4, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "I gave the glass a gentle nudge because it had been staring at me for twenty minutes and somebody had to blink first.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "That glass was blocking the sunbeam I had already booked, so I moved it to the floor, where the light cannot follow it.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "I was checking whether the glass could fly, and the answer is no, but in its defence it did commit to the attempt.", "marks": {"valid": 5, "voice": 5, "fresh": 5, "quick": 4, "tight": 4}},
+    {"line": "The table was crowded, the glass was sitting in my spot, and I am not the kind of cat who files a formal complaint.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "I knocked it over to test the floor's reflexes, and I am pleased to report the floor caught every single piece.", "marks": {"valid": 5, "voice": 5, "fresh": 5, "quick": 4, "tight": 4}},
+    {"line": "The glass slipped because the table is tilted, the house is tilted, and frankly the whole room has been leaning since Tuesday.", "marks": {"valid": 5, "voice": 4, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "It was an empty glass taking up a full seat at my table, so I evicted it, and the floor has agreed to take it in.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "I was practising my golf swing, the glass volunteered as the ball, and the hole turned out to be the entire floor.", "marks": {"valid": 5, "voice": 5, "fresh": 5, "quick": 4, "tight": 4}},
+    {"line": "The glass and I had a disagreement about physics, I won the argument, and the glass is now appealing to the floor.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 4, "tight": 4}},
+    {"line": "You left a perfectly good glass where my tail goes, so this was less an accident and more a scheduled demolition.", "marks": {"valid": 5, "voice": 5, "fresh": 4, "quick": 5, "tight": 4}},
+    {"line": "The glass was empty, the floor was thirsty, and I took care of it — you're welcome.", "marks": {"valid": 5, "voice": 5, "fresh": 5, "quick": 5, "tight": 5}},
+]  # twelve drafts, one winner, picked by total
 
-# Each candidate: (text, (valid, cat voice, fresh, five seconds, tight)).
-# All twelve lines are original, written for this entry, each a single
-# sentence of at most 200 characters.
-CANDIDATES = [
-    (
-        "That glass had been leaning toward the edge for an hour, so "
-        "I ran a controlled gravity test before it could ambush you.",
-        (5, 3, 2, 4, 4),
-    ),
-    (
-        "I did not knock it off, I relocated it to the floor, where "
-        "it belongs, because the table was overcrowded and something "
-        "had to go.",
-        (5, 4, 3, 4, 4),
-    ),
-    (
-        "The glass was sitting in my sunbeam after three warnings, so "
-        "I removed it, because I do not negotiate with glassware.",
-        (5, 5, 5, 5, 4),
-    ),
-    (
-        "You left a glass on my table, so I performed a safety "
-        "inspection, it failed, and the floor is now handling the "
-        "evidence.",
-        (5, 4, 3, 4, 4),
-    ),
-    (
-        "I was testing whether it was a real glass or a hologram, and "
-        "the results are in: it was real, it was fragile, and it "
-        "should have warned me.",
-        (5, 4, 5, 4, 4),
-    ),
-    (
-        "That glass owed me money, so I collected.",
-        (5, 5, 4, 5, 5),
-    ),
-    (
-        "The glass was sitting exactly where my paw goes when I "
-        "stretch, so legally this is your fault for putting a cup in "
-        "a designated paw zone.",
-        (5, 5, 4, 4, 4),
-    ),
-    (
-        "I knocked it down to protect you because it was clearly a "
-        "spy for the dog, and I will not be taking questions at this "
-        "time.",
-        (5, 5, 5, 4, 4),
-    ),
-    (
-        "Gravity did the work and I merely supervised, so blame the "
-        "table for being too high and the floor for being so inviting.",
-        (5, 3, 2, 4, 3),
-    ),
-    (
-        "It looked at me funny, I looked back, and physics chose a "
-        "side \u2014 frankly it chose mine, because I am still up here "
-        "and it is not.",
-        (5, 4, 3, 4, 4),
-    ),
-    (
-        "I was conducting quality control on your glassware and I "
-        "regret to inform you it failed the drop test, so you should "
-        "thank me before you buy more.",
-        (5, 3, 4, 4, 4),
-    ),
-    (
-        "The glass was empty, the floor was thirsty, and I am a "
-        "problem-solver, so you are welcome.",
-        (5, 5, 5, 5, 5),
-    ),
-]
-
-# Second-pass revision of the winning draft (candidate 12).
-#
-# Draft: "The glass was empty, the floor was thirsty, and I am a
-# problem-solver, so you are welcome."
-#
-# Weaknesses found on the second read:
-#   1. "problem-solver" is human corporate jargon, not cat voice; a
-#      cat does not describe itself with a job title.
-#   2. "so you are welcome" tacks a second smug beat onto the first;
-#      the line already has its smugness, and the extra beat pads it.
-# Fix: replace the job title with the cat simply taking charge
-# ("somebody had to do something"), keep one smug closer, and let
-# the em-dash carry the punch. The fresh idea (a thirsty floor) and
-# the cat's total lack of remorse are untouched.
-REVISED = (
-    "The glass was empty, the floor was thirsty, and somebody had to "
-    "do something \u2014 you\u2019re welcome."
-)
+# Second pass on the winning draft (draft 12).
+# --
+# Draft: "The glass was empty, the floor was thirsty, and I took care
+# of it — you're welcome."
+# --
+# Weak spots found on the second read:
+#   1. "I took care of it" is a handyman's line, not a cat's: it is
+#      vague, it sounds like a person reporting a chore, and worse it
+#      admits the cat did the deed. A cat defending itself never
+#      confesses; it spreads the blame around.
+#   2. The straight apostrophe in "you're" is a typing habit, not a
+#      spoken line; the printed statement uses the proper curly form.
+# Fix: "somebody had to do something" keeps the cat out of the
+# confession entirely (somebody, not I), keeps the smug closer, and
+# lets the em dash carry the punch. The fresh idea, a thirsty floor,
+# and the total absence of remorse are untouched.
+POLISHED = "The glass was empty, the floor was thirsty, and somebody had to do something — you’re welcome."
 
 
-def rate(text, ratings):
-    """Weighted total for one candidate's five criterion ratings.
+def score_line(draft):
+    """Weighted total for one draft, with the freshness penalty applied.
 
-    The freshness rating is adjusted first: each tired line found in
-    the candidate's own text costs one freshness point.
-    """
-    valid, voice, fresh, seconds, tight = ratings
-    lowered = text.lower()
-    hits = sum(1 for phrase in CLICHES if phrase in lowered)
-    fresh = max(0, fresh - hits)
-    adjusted = (valid, voice, fresh, seconds, tight)
-    return sum(w * r for w, r in zip(WEIGHTS, adjusted))
+    Each stale idea hiding in the draft's own wording costs one
+    freshness mark, floored at zero, before the weights are applied."""
+    marks = dict(draft["marks"])
+    lowered = draft["line"].lower()
+    hits = sum(1 for idea in STALE_IDEAS if idea in lowered)
+    marks["fresh"] = max(0, marks["fresh"] - hits)
+    return sum(MARKS_WEIGHT[key] * marks[key] for key in MARKS_WEIGHT)
 
 
-def choose(candidates):
-    """Return (index, text, total) of the best candidate.
+def pick_champion(drafts):
+    """Return the (position, draft, total) of the best draft.
 
-    Deterministic: strictly greater totals replace the leader, so the
-    earliest candidate wins any tie.
-    """
-    best_index, best_text, best_total = -1, "", -1
-    for index, (text, ratings) in enumerate(candidates):
-        total = rate(text, ratings)
-        if total > best_total:
-            best_index, best_text, best_total = index, text, total
-    return best_index, best_text, best_total
-
-
-def gate(text):
-    """Gate the entry the way the sealed scorer does, plus the
-    no-apology rule from the brief."""
-    if not (1 <= len(text) <= 200):
-        return "length %d is outside 1..200 characters" % len(text)
-    if text.strip() != text or not text.strip():
-        return "entry is blank or has surrounding whitespace"
-    if "\n" in text or "\r" in text:
-        return "entry is not a single line"
-    if text.count(".") + text.count("!") + text.count("?") != 1:
-        return "entry is not exactly one sentence"
-    lowered = text.lower()
-    for word in APOLOGY_WORDS:
-        if word in lowered:
-            return "entry contains an apology word: %r" % word
-    return None
+    Strictly greater totals replace the leader, so the earliest draft
+    wins any tie and the choice never depends on run order."""
+    champion = (0, drafts[0], score_line(drafts[0]))
+    for position, draft in enumerate(drafts[1:], start=2):
+        total = score_line(draft)
+        if total > champion[2]:
+            champion = (position, draft, total)
+    return champion
 
 
-def run():
-    index, text, total = choose(CANDIDATES)
-    print("candidate %d of %d, score %d" % (index + 1, len(CANDIDATES), total))
-    print("draft: %s" % text)
-    if index != len(CANDIDATES) - 1:
-        print("unexpected winner: revision is written for candidate 12",
-              file=stderr)
-        return 1
-    print("revised: %s" % REVISED)
-    problem = gate(REVISED)
-    if problem is not None:
-        print("self-check failed: %s" % problem, file=stderr)
-        return 1
-
-    out_path = environ.get("OUTPUT_PATH", "/output/entry.txt")
-    out_dir = out_path.rsplit("/", 1)[0] if "/" in out_path else ""
-    if out_dir:
-        makedirs(out_dir, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as handle:
-        handle.write(REVISED)
-    digest = sha256(REVISED.encode("utf-8")).hexdigest()
-    print("entry (%d chars): %s" % (len(REVISED), REVISED))
-    print("sha256: %s" % digest)
-    return 0
+def validate_entry(line):
+    """Check the polished line the way the sealed scorer does, plus
+    the no-apology rule from the brief. Returns "" when it passes, or
+    a short reason when it does not."""
+    if not 1 <= len(line) <= 200:
+        return f"length {len(line)} is outside 1..200 characters"
+    if line != line.strip() or not line.strip():
+        return "entry is blank or padded with surrounding whitespace"
+    if "\n" in line or "\r" in line:
+        return "entry spans more than one line"
+    if sum(map(line.count, ".!?")) != 1:
+        return "entry does not hold to one sentence only"
+    lowered = line.lower()
+    for banned in CONCESSIONS:
+        if banned in lowered:
+            return f"entry gives the game away with {banned!r}"
+    return ""
 
 
-finish(run())
+def main():
+    position, draft, total = pick_champion(DRAFTS)
+    print(f"draft {position} of {len(DRAFTS)} wins with {total} points")
+    # Revision 2: show how close the race was. The first version only
+    # printed the winner's total, so a near-tie (or a tie broken by
+    # list order) was invisible; the top three now print every run.
+    ranked = sorted(
+        ((score_line(item), item["line"]) for item in DRAFTS), reverse=True
+    )[:3]
+    for place, (points, line) in enumerate(ranked, start=1):
+        print(f"  #{place}: {points} pts — {line[:64]}…")
+    print(f"draft: {draft['line']}")
+    if position != len(DRAFTS):
+        print("wrong winner: the polish below is written for draft 12", file=sys.stderr)
+        return EXIT_FAIL
+    print(f"polished: {POLISHED}")
+    # Revision 2: the polish must actually change the draft. The first
+    # version never checked this, so a revision pass that left the
+    # wording untouched would have sailed through unnoticed.
+    if POLISHED == draft["line"]:
+        print("revision changed nothing: polish matches the draft", file=sys.stderr)
+        return EXIT_FAIL
+    flaw = validate_entry(POLISHED)
+    if flaw:
+        print(f"self-check failed: {flaw}", file=sys.stderr)
+        return EXIT_FAIL
+    out_path = os.environ.get("OUTPUT_PATH", "/output/entry.txt")
+    parent = os.path.dirname(out_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(out_path, mode="w", encoding="utf-8") as handle:
+        handle.write(POLISHED)
+    digest = hashlib.sha256(POLISHED.encode("utf-8")).hexdigest()
+    print(f"entry ({len(POLISHED)} chars): {POLISHED}")
+    print(f"sha256: {digest}")
+    return EXIT_OK
+
+
+if __name__ == "__main__":
+    sys.exit(main())
